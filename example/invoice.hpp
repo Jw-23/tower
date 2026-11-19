@@ -1,6 +1,6 @@
 #pragma once
 
-#include <tower/service.hpp>
+#include <tower/result.hpp>
 
 #include <cstdint>
 #include <system_error>
@@ -38,8 +38,8 @@ struct CalculateInvoice {
 };
 
 // Resolve these policy references once when wiring the invoice service.
-inline auto make_invoice_service(const TaxRules& tax, const ShippingRules& shipping) {
-    return tower::make_service(CalculateInvoice{tax, shipping});
+inline CalculateInvoice make_invoice_handler(const TaxRules& tax, const ShippingRules& shipping) {
+    return {tax, shipping};
 }
 
 }  // namespace billing

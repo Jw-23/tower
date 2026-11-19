@@ -12,7 +12,7 @@ struct Priority : Priority<I - 1> {};
 template<>
 struct Priority<0> {};
 
-// Prefer the owned request form, but allow services that take mutable references.
+// Prefer the owned request form, with reference forms for borrowed requests.
 template<class S, class Request>
 auto route_result(Priority<2>) -> service_result_t<S&, Request&&>;
 
@@ -24,6 +24,15 @@ auto route_result(Priority<0>) -> service_result_t<S&, const Request&>;
 
 template<class S, class Request>
 using route_result_t = decltype(route_result<S, Request>(Priority<2>{}));
+
+template<class Request, class S, class Response>
+struct Route {
+    using request_type = Request;
+    using result_type = Response;
+    using service_type = S;
+
+    S service;
+};
 
 template<class Request, class... Routes>
 struct FindRoute {};
@@ -37,81 +46,75 @@ struct FindRoute<Request, First, Rest...>
                          Type<First>, FindRoute<Request, Rest...>> {};
 
 template<class... Routes>
-struct UniqueRequests : std::true_type {};
+struct RouteResponse { using type = void; };
 
 template<class First, class... Rest>
-struct UniqueRequests<First, Rest...>
-    : all<std::integral_constant<bool, !std::is_same<typename First::request_type,
-                                                   typename Rest::request_type>::value>...,
-          std::integral_constant<bool, UniqueRequests<Rest...>::value>> {};
+struct RouteResponse<First, Rest...> { using type = typename First::result_type; };
 
-template<class, class... Routes>
-struct CompatibleRoutes : std::false_type {};
-
-template<class First, class... Rest>
-struct CompatibleRoutes<void_t<typename First::result_type, typename Rest::result_type...,
-                               typename First::request_type, typename Rest::request_type...>,
-                        First, Rest...>
-    : std::integral_constant<bool, UniqueRequests<First, Rest...>::value &&
-          all<std::is_same<typename First::result_type, typename Rest::result_type>...>::value> {};
+template<class Request, class F, class... Routes>
+using appended_route_t = std::enable_if_t<all<
+    std::integral_constant<bool, !std::is_same<Request, typename Routes::request_type>::value>...,
+    std::is_same<route_result_t<adapted_service_t<F>, Request>, typename Routes::result_type>...>::value,
+    Route<Request, adapted_service_t<F>, route_result_t<adapted_service_t<F>, Request>>>;
 
 }  // namespace detail
 
-template<class Request, class S>
-struct Route {
-    using request_type = Request;
-    using result_type = detail::route_result_t<S, Request>;
+template<class... Routes>
+class Router : private Routes... {
+    template<class...>
+    friend class Router;
 
-    S service;
-};
-
-template<class Request, class S, class Stored = std::decay_t<S>,
-         class = detail::route_result_t<Stored, std::decay_t<Request>>,
-         std::enable_if_t<std::is_constructible<Stored, S&&>::value, int> = 0>
-auto route(S&& service) -> Route<std::decay_t<Request>, Stored> {
-    return {std::forward<S>(service)};
-}
-
-template<class First, class... Rest>
-class Router : private First, private Rest... {
-    static_assert(detail::CompatibleRoutes<void, First, Rest...>::value,
-                  "Router requires distinct request types and identical Result types");
+    template<class... Rs, std::enable_if_t<detail::all<std::is_constructible<Routes, Rs&&>...>::value,
+                                          int> = 0>
+    explicit Router(Rs&&... routes) : Routes(std::forward<Rs>(routes))... {}
 
     template<class Request>
-    using Match = typename detail::FindRoute<std::decay_t<Request>, First, Rest...>::type;
+    using Match = typename detail::FindRoute<std::decay_t<Request>, Routes...>::type;
 
 public:
-    using result_type = typename First::result_type;
+    Router() = default;
 
-    template<class F, class... Rs,
-             std::enable_if_t<detail::all<std::is_constructible<First, F&&>,
-                                           std::is_constructible<Rest, Rs&&>...>::value, int> = 0>
-    explicit Router(F&& first, Rs&&... rest)
-        : First(std::forward<F>(first)), Rest(std::forward<Rs>(rest))... {}
+    using result_type = typename detail::RouteResponse<Routes...>::type;
+
+    template<class Request, class F,
+             class Added = detail::appended_route_t<std::decay_t<Request>, F&&, Routes...>,
+             std::enable_if_t<detail::all<std::is_copy_constructible<Routes>...,
+                                         std::is_move_constructible<Added>>::value, int> = 0>
+    auto route(F&& handler) const& -> Router<Routes..., Added> {
+        return Router<Routes..., Added>(static_cast<const Routes&>(*this)...,
+                                       Added{detail::adapt_service(std::forward<F>(handler))});
+    }
+
+    template<class Request, class F,
+             class Added = detail::appended_route_t<std::decay_t<Request>, F&&, Routes...>>
+    auto route(F&& handler) && -> Router<Routes..., Added> {
+        return Router<Routes..., Added>(std::move(static_cast<Routes&>(*this))...,
+                                       Added{detail::adapt_service(std::forward<F>(handler))});
+    }
 
     template<class Request, class Selected = Match<Request>,
-             class R = detail::service_result_t<decltype((std::declval<Selected&>().service)),
-                                                Request&&>,
+             class R = detail::service_result_t<typename Selected::service_type&, Request&&>,
              std::enable_if_t<std::is_same<R, result_type>::value, int> = 0>
-    result_type operator()(Request&& request) {
+    R operator()(Request&& request) {
         return static_cast<Selected&>(*this).service(std::forward<Request>(request));
     }
 
     template<class Request, class Selected = Match<Request>,
-             class R = detail::service_result_t<decltype((std::declval<const Selected&>().service)),
-                                                Request&&>,
+             class R = detail::service_result_t<const typename Selected::service_type&, Request&&>,
              std::enable_if_t<std::is_same<R, result_type>::value, int> = 0>
-    result_type operator()(Request&& request) const {
+    R operator()(Request&& request) const {
         return static_cast<const Selected&>(*this).service(std::forward<Request>(request));
     }
-};
 
-template<class... Routes,
-         std::enable_if_t<detail::CompatibleRoutes<void, std::decay_t<Routes>...>::value &&
-                          detail::all<std::is_constructible<std::decay_t<Routes>, Routes&&>...>::value,
-                          int> = 0>
-auto make_router(Routes&&... routes) -> Router<std::decay_t<Routes>...> {
-    return Router<std::decay_t<Routes>...>(std::forward<Routes>(routes)...);
-}
+    template<class Request>
+    auto call(Request&& request) -> decltype((*this)(std::forward<Request>(request))) {
+        return (*this)(std::forward<Request>(request));
+    }
+
+    template<class Request>
+    auto call(Request&& request) const -> decltype((*this)(std::forward<Request>(request))) {
+        return (*this)(std::forward<Request>(request));
+    }
+};
 
 }  // namespace tower

@@ -7,10 +7,10 @@ int main() {
     checkout::QuoteAudit audit;
     auto quote_order = checkout::make_quote_service(prices, audit);
 
-    const auto retail = quote_order(checkout::RetailOrder{0, 2});
+    const auto retail = quote_order.call(checkout::RetailOrder{0, 2});
     prices.fail_next(1);
-    const auto wholesale = quote_order(checkout::WholesaleOrder{1, 20});
-    const auto rejected = quote_order(checkout::WholesaleOrder{1, 4});
+    const auto wholesale = quote_order.call(checkout::WholesaleOrder{1, 20});
+    const auto rejected = quote_order.call(checkout::WholesaleOrder{1, 4});
     if (!retail || !wholesale || !rejected.has_error()) {
         std::cerr << "Unexpected checkout result\n";
         return 1;

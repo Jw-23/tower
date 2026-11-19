@@ -11,22 +11,20 @@
 #include <string>
 
 int main() {
-    auto routes = tower::make_router(
-        tower::route<int>(tower::make_service([](int n) { return n * 2; })),
-        tower::route<std::string>(tower::make_service([](const std::string& s)
-            -> tower::Result<int> {
+    auto service = tower::Tower{}
+        .log_to(std::clog)
+        .next(tower::Retry<>{3})
+        .router()
+        .route<int>([](int n) { return n * 2; })
+        .route<std::string>([](const std::string& s) -> tower::Result<int> {
             if (s.empty()) {
                 return tower::failure(std::make_error_code(std::errc::invalid_argument));
             }
             return tower::success(static_cast<int>(s.size()));
-        })));
+        })
+        .build();
 
-    auto service = tower::apply_layers(std::move(routes), tower::log_to(std::clog),
-        tower::retry(3, [](const tower::Error& error) {
-            return error == std::errc::resource_unavailable_try_again;
-        }));
-
-    auto result = service(std::string("tower"));
+    auto result = service.call(std::string("tower"));
     if (result) {
         std::cout << result.value() << '\n';
     }
@@ -34,26 +32,31 @@ int main() {
 }
 ```
 
-- `make_service` 将普通值包装成 `Result<T>`，将 `void` 包装成 `Result<void>`，并用 `std::reference_wrapper` 保存左值引用。函数已经返回 Boost.Outcome `basic_result` 时，保留原结果类型。引用的有效期由被引用对象决定。
-- `make_layer` 接受一个把内层服务转换为新服务的工厂。`apply_layers` 按参数顺序从外到内组合。`log_to` 每次调用输出成功或失败，`log(sink)` 则把结果的常量引用传给自定义回调。
-- `retry(n)` 最多尝试 `n` 次，含首次调用。`0` 按 `1` 处理。可选谓词接收错误并决定是否再次尝试。左值参数沿用同一引用，右值在最后一次之前使用副本。仅可移动的请求可通过左值引用交给支持该签名的服务。右值调用的结果应拥有其数据，或者只引用生命周期更长的对象。
-- 路由按请求的 `std::decay` 类型在编译期选择服务。每个请求类型只能注册一次，所有服务的完整 `Result` 类型必须相同。`is_service_for<S, Args...>` 和 `is_layer_for<L, S, Args...>` 可用于检测指定调用签名。
+- 从 `Tower{}` 开始，通过 `.next(layer)` 依次注册中间件，先注册的在外层。`.service(handler)` 直接生成可 `.call(...)` 的服务。普通值、`void`、左值引用分别包装成 `Result<T>`、`Result<void>`、`Result<std::reference_wrapper<T>>`。已有的 Boost.Outcome `basic_result` 保留原类型。
+- `Layer::layer(inner)` 包装内层服务。自定义层可以实现这个方法，也可以用 builder 的 `.layer(factory)` 传入接受内层服务的工厂。`.log(sink)` 向回调传递结果的常量引用，`.log_to(stream)` 输出成功或失败。
+- `.retry(n, predicate)` 最多尝试 `n` 次，含首次调用，`0` 按 `1` 处理。省略谓词时重试所有错误。左值参数沿用同一引用，右值在最后一次之前使用副本。仅可移动的请求可通过左值引用交给支持该签名的服务。右值调用的结果应拥有其数据，或者只引用生命周期更长的对象。
+- `.router().route<T>(handler)... .build()` 逐个注册路由并生成可调用的服务。路由仍按请求的 `std::decay` 类型在编译期分发。每个请求类型只能注册一次，所有服务的完整 `Result` 类型必须相同。`is_service_for<S, Args...>` 和 `is_layer_for<L, S, Args...>` 可用于检测指定调用签名。
 - `tower::Result<T>` 使用 `std::error_code`。回调用 `tower::failure(error)` 返回失败，调用者先检查 `Result` 再读取值或错误。对错误分支调用 `.value()` 会终止进程。
 
 ## 依赖注入
 
 ```cpp
-tower::Dependencies dependencies;
-if (!dependencies.emplace<int>(10) || !dependencies.emplace<std::string>("jobs")) {
-    return 1;
+auto wired = tower::Tower{}
+    .dependencies()
+    .with(10)
+    .emplace<std::string>("jobs")
+    .wire([](int& count, const std::string& label) {
+        return [&count, &label](int amount) {
+            count += amount;
+            return label + "=" + std::to_string(count);
+        };
+    });
+if (wired) {
+    auto result = wired.value().call(2);
 }
-
-auto res = dependencies.invoke([](int& count, const std::string& label) {
-    return label + "=" + std::to_string(++count);
-});
 ```
 
-容器按具体类型持有一个实例。`insert(value)` 按 `std::decay` 后的类型存储传入值，`emplace<T>(args...)` 可直接构造不可移动对象或定长数组。`get<T>()` 返回引用包装。普通函数和单一签名的函数对象可用 `invoke` 推断任意数量的参数，泛型 lambda 和重载函数对象可用 `invoke_as<Args...>` 指定类型。引用参数使用容器里的实例，值参数从实例构造。缺失和重复注册分别返回 `tower::errc::missing_dependency` 和 `tower::errc::duplicate_dependency`。
+容器按具体类型持有一个实例。`.with(value)` 按 `std::decay` 后的类型存储传入值，`.emplace<T>(args...)` 可直接构造不可移动对象或定长数组。`.wire(factory)` 在组装时解析依赖，返回的服务拥有容器，并应用 `.dependencies()` 之前注册的中间件。`.invoke(function)` 直接注入参数并调用函数，命名的作用域也支持 `.get<T>()` 和返回依赖的借用引用。泛型 lambda 和重载函数对象可以用 `.wire_as<Args...>(factory)` 或 `.invoke_as<Args...>(function)` 指定参数类型。借用依赖的结果应由命名作用域持有依赖的生命周期。缺失和重复注册分别返回 `tower::errc::missing_dependency` 和 `tower::errc::duplicate_dependency`。
 
 ## 业务示例
 
@@ -64,8 +67,8 @@ cmake --build build/debug --target tower_example_checkout tower_example_invoice
 ./build/debug/example/tower_example_invoice
 ```
 
-- [结账报价](example/checkout.hpp)把零售和批发规则放在各自的处理器里，用 `Router` 按订单类型选择处理器。`make_quote_service` 集中声明重试和审计，审计包在重试外层，因此每笔订单只记一次最终结果。
-- [账单计算](example/invoice.cpp)在启动时从 `Dependencies` 解析税率和运费规则，组装出只接收账单请求的服务。容器持有这些规则，业务计算通过已绑定的类型引用访问它们。
+- [结账报价](example/checkout.hpp)把零售和批发规则放在各自的处理器里，用 `.router().route<T>(...)` 按订单类型注册处理器。`make_quote_service` 集中声明重试和审计，审计包在重试外层，因此每笔订单只记一次最终结果。
+- [账单计算](example/invoice.cpp)用 `.dependencies().with(...).wire(...)` 在启动时解析税率和运费规则。服务持有规则，业务调用只接收账单请求。
 
 ## 构建与检查
 
@@ -108,13 +111,13 @@ cmake --build build/benchmark --target tower_benchmarks
 
 | 场景 | 手写（ns） | Tower（ns） |
 | --- | ---: | ---: |
-| 简单调用 / `Service` | 0.705 | 0.707 |
-| 简单调用 / 静态路由 | 0.705 | 0.705 |
-| 零售报价成功 | 2.07 | 1.25 |
-| 批发报价重试一次后成功 | 2.49 | 2.75 |
-| 报价因无效 SKU 失败 | 1.98 | 0.89 |
-| 批发报价重试耗尽 | 2.61 | 3.48 |
-| 账单，启动时绑定规则 | 0.765 | 0.766 |
-| 账单，每次请求查找规则 | 15.06 | 15.31 |
+| 简单调用 / `Service` | 0.688 | 0.689 |
+| 简单调用 / 类型路由 | 0.688 | 0.689 |
+| 零售报价成功 | 1.98 | 1.19 |
+| 批发报价重试一次后成功 | 2.42 | 2.88 |
+| 报价因无效 SKU 失败 | 1.89 | 0.85 |
+| 批发报价重试耗尽 | 2.44 | 3.15 |
+| 账单，启动时绑定规则 | 0.747 | 0.750 |
+| 账单，每次请求查找规则 | 14.50 | 14.40 |
 
-将借用参数的重试合并到同一个调用点，并内联该循环后，重试耗尽从 4.60 ns 降到 3.48 ns，与手写版的差距为 0.87 ns。账单示例采用启动时绑定，因为每次请求从类型容器查找规则要额外承担运行时查找成本。
+批发报价重试耗尽的差距为 0.71 ns。账单示例采用启动时绑定，把类型容器查找移到了请求处理之前。

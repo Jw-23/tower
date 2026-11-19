@@ -28,30 +28,67 @@ public:
     explicit Service(Fn&& function) : function_(std::forward<Fn>(function)) {}
 
     template<class... Args>
-    auto operator()(Args&&... args) &
+    auto call(Args&&... args) &
         -> decltype(detail::call_result(std::declval<F&>(), std::forward<Args>(args)...)) {
         return detail::call_result(function_, std::forward<Args>(args)...);
     }
 
     template<class... Args>
-    auto operator()(Args&&... args) const&
+    auto call(Args&&... args) const&
         -> decltype(detail::call_result(std::declval<const F&>(), std::forward<Args>(args)...)) {
         return detail::call_result(function_, std::forward<Args>(args)...);
     }
 
     template<class... Args>
-    auto operator()(Args&&... args) &&
+    auto call(Args&&... args) &&
         -> decltype(detail::call_result(std::declval<F&&>(), std::forward<Args>(args)...)) {
         return detail::call_result(std::move(function_), std::forward<Args>(args)...);
+    }
+
+    template<class... Args>
+    auto operator()(Args&&... args) & -> decltype(call(std::forward<Args>(args)...)) {
+        return call(std::forward<Args>(args)...);
+    }
+
+    template<class... Args>
+    auto operator()(Args&&... args) const& -> decltype(call(std::forward<Args>(args)...)) {
+        return call(std::forward<Args>(args)...);
+    }
+
+    template<class... Args>
+    auto operator()(Args&&... args) &&
+        -> decltype(std::move(*this).call(std::forward<Args>(args)...)) {
+        return std::move(*this).call(std::forward<Args>(args)...);
     }
 
 private:
     F function_;
 };
 
-template<class F, std::enable_if_t<std::is_constructible<std::decay_t<F>, F&&>::value, int> = 0>
-auto make_service(F&& function) -> Service<std::decay_t<F>> {
-    return Service<std::decay_t<F>>(std::forward<F>(function));
+namespace detail {
+
+template<class F>
+struct AsService { using type = Service<F>; };
+
+template<class F>
+struct AsService<Service<F>> { using type = Service<F>; };
+
+template<class F>
+using as_service_t = typename AsService<std::decay_t<F>>::type;
+
+template<class F>
+using is_service_source = std::integral_constant<bool, std::is_class<std::decay_t<F>>::value ||
+    std::is_union<std::decay_t<F>>::value || std::is_function<std::remove_pointer_t<std::decay_t<F>>>::value>;
+
+template<class F>
+using adapted_service_t = std::enable_if_t<all<is_service_source<F>,
+    std::is_constructible<as_service_t<F>, F>>::value, as_service_t<F>>;
+
+template<class F>
+auto adapt_service(F&& handler) -> adapted_service_t<F&&> {
+    return as_service_t<F>(std::forward<F>(handler));
 }
+
+}  // namespace detail
 
 }  // namespace tower

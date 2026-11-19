@@ -2,6 +2,7 @@
 #include "invoice.hpp"
 
 #include <tower/dependencies.hpp>
+#include <tower/tower.hpp>
 
 #include <benchmark/benchmark.h>
 
@@ -10,6 +11,9 @@
 #include <system_error>
 
 namespace {
+
+constexpr billing::TaxRules tax_rules{750};
+constexpr billing::ShippingRules shipping_rules{499, 150};
 
 struct ManualCheckout {
     checkout::PriceBook& prices;
@@ -102,8 +106,11 @@ auto make_manual_invoice(const tower::Dependencies& dependencies)
     return tower::success(billing::CalculateInvoice{tax.value().get(), shipping.value().get()});
 }
 
-auto make_wired_invoice(const tower::Dependencies& dependencies) {
-    return dependencies.invoke(billing::make_invoice_service);
+auto make_wired_invoice(const tower::Dependencies&) {
+    return tower::Tower{}.dependencies()
+        .with(tax_rules)
+        .with(shipping_rules)
+        .wire(billing::make_invoice_handler);
 }
 
 struct ManualInvoiceLookup {
@@ -137,8 +144,7 @@ auto make_invoice_lookup(const tower::Dependencies& dependencies) -> tower::Resu
 template<class Factory>
 void BM_Invoice(benchmark::State& state, Factory make_service) {
     tower::Dependencies dependencies;
-    if (!dependencies.insert(billing::TaxRules{750}) ||
-        !dependencies.insert(billing::ShippingRules{499, 150})) {
+    if (!dependencies.insert(tax_rules) || !dependencies.insert(shipping_rules)) {
         state.SkipWithError("could not register billing policies");
         return;
     }

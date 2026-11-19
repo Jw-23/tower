@@ -1,7 +1,6 @@
 #pragma once
 
-#include <tower/layer.hpp>
-#include <tower/router.hpp>
+#include <tower/tower.hpp>
 
 #include <array>
 #include <cstddef>
@@ -83,13 +82,14 @@ struct QuoteAudit {
 };
 
 inline auto make_quote_service(PriceBook& prices, QuoteAudit& audit) {
-    auto routes = tower::make_router(
-        tower::route<RetailOrder>(tower::make_service(RetailQuote{prices})),
-        tower::route<WholesaleOrder>(tower::make_service(WholesaleQuote{prices})));
-
     // Put the audit outside retry so each order contributes one final outcome.
-    return tower::apply_layers(routes, tower::log(std::ref(audit)),
-                               tower::retry(quote_attempts, RetryUnavailable{}));
+    return tower::Tower{}
+        .log(std::ref(audit))
+        .next(tower::Retry<RetryUnavailable>{quote_attempts})
+        .router()
+        .route<RetailOrder>(RetailQuote{prices})
+        .route<WholesaleOrder>(WholesaleQuote{prices})
+        .build();
 }
 
 }  // namespace checkout

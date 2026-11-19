@@ -23,24 +23,25 @@ void BM_DirectCall(benchmark::State& state) {
 }
 
 void BM_ServiceCall(benchmark::State& state) {
-    auto service = tower::make_service(Increment{});
-    measure_transform(state, [&service](int request) { return service(request).value(); });
+    auto service = tower::Tower{}.service(Increment{});
+    measure_transform(state, [&service](int request) { return service.call(request).value(); });
 }
 
 void BM_RouterCall(benchmark::State& state) {
-    auto router = tower::make_router(
-        tower::route<long>(tower::make_service([](long value) { return value > 0 ? 1 : 0; })),
-        tower::route<int>(tower::make_service(Increment{})));
-    measure_transform(state, [&router](int request) { return router(request).value(); });
+    auto router = tower::Tower{}.router()
+        .route<long>([](long value) { return value > 0 ? 1 : 0; })
+        .route<int>(Increment{})
+        .build();
+    measure_transform(state, [&router](int request) { return router.call(request).value(); });
 }
 
 void BM_LogSink(benchmark::State& state) {
     int recorded = 0;
-    auto service = tower::log([&recorded](const tower::Result<int>& result) {
+    auto service = tower::Tower{}.log([&recorded](const tower::Result<int>& result) {
         recorded = result.value();
         benchmark::DoNotOptimize(recorded);
-    })(tower::make_service(Increment{}));
-    measure_transform(state, [&service](int request) { return service(request).value(); });
+    }).service(Increment{});
+    measure_transform(state, [&service](int request) { return service.call(request).value(); });
 }
 
 struct RetryRequest {
@@ -50,19 +51,19 @@ struct RetryRequest {
 
 void BM_Retry(benchmark::State& state, int failures) {
     const auto unavailable = std::make_error_code(std::errc::resource_unavailable_try_again);
-    auto service = tower::retry(2)(tower::make_service([unavailable](RetryRequest& request)
+    auto service = tower::Tower{}.retry(2).service([unavailable](RetryRequest& request)
         -> tower::Result<int> {
         if (request.remaining_failures > 0) {
             --request.remaining_failures;
             return tower::failure(unavailable);
         }
         return tower::success(Increment{}(request.value));
-    }));
+    });
 
     for (auto _ : state) {
         RetryRequest request{42, failures};
         benchmark::DoNotOptimize(request);
-        auto result = service(request);
+        auto result = service.call(request);
         benchmark::DoNotOptimize(result);
     }
 }
