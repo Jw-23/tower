@@ -154,6 +154,26 @@ TEST(LayerTest, ComposesCustomLayers) {
     EXPECT_EQ(result.value(), 8);
 }
 
+TEST(LayerTest, ReusesBorrowedRequestAndSkipsPredicateOnLastAttempt) {
+    auto operation = tower::make_service([](int& request) -> Result<int> {
+        ++request;
+        return tower::failure(unavailable);
+    });
+    int predicate_calls = 0;
+    auto retry = tower::retry(3, [&predicate_calls](const tower::Error& error) {
+        ++predicate_calls;
+        return error == unavailable;
+    });
+    auto service = retry(operation);
+    int request = 0;
+    const auto result = service(request);
+
+    ASSERT_TRUE(result.has_error());
+    EXPECT_EQ(result.error(), unavailable);
+    EXPECT_EQ(request, 3);
+    EXPECT_EQ(predicate_calls, 2);
+}
+
 TEST(LayerTest, SupportsMoveOnlyLogSinkAndBorrowedRetryArgument) {
     auto consuming = tower::retry(2)(tower::make_service([](std::unique_ptr<int> value) {
         return *value;

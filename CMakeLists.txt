@@ -17,6 +17,7 @@ target_link_libraries(tower INTERFACE Boost::boost)
 
 include(CTest)
 option(TOWER_BUILD_BENCHMARKS "Build the tower microbenchmarks" OFF)
+option(TOWER_BUILD_EXAMPLES "Build the tower business examples" OFF)
 if(BUILD_TESTING OR TOWER_BUILD_BENCHMARKS)
     include(FetchContent)
 endif()
@@ -54,12 +55,17 @@ if(TOWER_BUILD_BENCHMARKS)
         URL_HASH SHA256=35a77f46cc782b16fac8d3b107fbfbb37dcd645f7c28eee19f3b8e0758b48994)
     FetchContent_MakeAvailable(benchmark)
 
-    add_executable(tower_benchmarks benchmarks/tower_benchmarks.cpp)
+    add_executable(tower_benchmarks benchmarks/tower_benchmarks.cpp benchmarks/business_benchmarks.cpp)
+    target_include_directories(tower_benchmarks PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/example")
     target_link_libraries(tower_benchmarks PRIVATE tower::tower benchmark::benchmark_main)
     set_target_properties(tower_benchmarks PROPERTIES
         CXX_STANDARD 14 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
     if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang|GNU)$" AND NOT MSVC)
         target_compile_options(tower_benchmarks PRIVATE -fno-exceptions)
     endif()
+endif()
+
+if(TOWER_BUILD_EXAMPLES)
+    add_subdirectory(example)
 endif()
 

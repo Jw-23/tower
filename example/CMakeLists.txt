@@ -1,0 +1,13 @@
+foreach(example IN ITEMS checkout invoice)
+    set(target "tower_example_${example}")
+    add_executable(${target} "${example}.cpp")
+    target_link_libraries(${target} PRIVATE tower::tower)
+    set_target_properties(${target} PROPERTIES
+        CXX_STANDARD 14 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang|GNU)$" AND NOT MSVC)
+        target_compile_options(${target} PRIVATE -fno-exceptions)
+    endif()
+    if(BUILD_TESTING)
+        add_test(NAME ${target} COMMAND ${target})
+    endif()
+endforeach()

@@ -2,6 +2,8 @@
 
 #include <tower/service.hpp>
 
+#include <boost/config.hpp>
+
 #include <cstddef>
 #include <ostream>
 
@@ -123,24 +125,48 @@ Arg replay(std::remove_reference_t<Arg>& request) { return request; }
 template<class Arg, std::enable_if_t<!std::is_reference<Arg>::value, int> = 0>
 Arg replay(const Arg& request) { return Arg(request); }
 
+template<class Predicate, class R>
+using retry_predicate_t = decltype(static_cast<bool>(std::declval<Predicate&>()(
+    std::declval<const R&>().assume_error())));
+
 template<class S, class Predicate>
 struct Retried {
     S service;
     Predicate predicate;
     std::size_t max_attempts;
 
+    // Inline borrowed retries so the outer layer can consume the final result directly.
     template<class... Args, class R = service_result_t<S&, Args&&...>,
-             class = decltype(static_cast<bool>(std::declval<Predicate&>()(
-                 std::declval<const R&>().assume_error()))),
-             std::enable_if_t<all<can_replay<Args>...>::value, int> = 0>
+             class = retry_predicate_t<Predicate, R>,
+             std::enable_if_t<all<std::is_lvalue_reference<Args>...>::value, int> = 0>
+    BOOST_FORCEINLINE R operator()(Args&&... args) {
+        // Borrowed arguments can use the same call site for every attempt.
+        for (std::size_t attempt = 1;; ++attempt) {
+            auto result = service(args...);
+            if (attempt == max_attempts || !should_retry(result)) {
+                return result;
+            }
+        }
+    }
+
+    template<class... Args, class R = service_result_t<S&, Args&&...>,
+             class = retry_predicate_t<Predicate, R>,
+             std::enable_if_t<!all<std::is_lvalue_reference<Args>...>::value &&
+                               all<can_replay<Args>...>::value, int> = 0>
     R operator()(Args&&... args) {
         for (std::size_t remaining = max_attempts; remaining > 1; --remaining) {
             auto result = service(replay<Args>(args)...);
-            if (!result.has_error() || !predicate(static_cast<const R&>(result).assume_error())) {
+            if (!should_retry(result)) {
                 return result;
             }
         }
         return service(std::forward<Args>(args)...);
+    }
+
+private:
+    template<class R>
+    bool should_retry(const R& result) {
+        return result.has_error() && static_cast<bool>(predicate(result.assume_error()));
     }
 };
 

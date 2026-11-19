@@ -10,7 +10,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}"
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install/${presetName}",
+                "TOWER_BUILD_EXAMPLES": "ON"
             }
         },
         {
@@ -20,7 +21,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "BUILD_TESTING": "OFF",
-                "TOWER_BUILD_BENCHMARKS": "ON"
+                "TOWER_BUILD_BENCHMARKS": "ON",
+                "TOWER_BUILD_EXAMPLES": "OFF"
             }
         }
     ]

@@ -55,6 +55,18 @@ auto res = dependencies.invoke([](int& count, const std::string& label) {
 
 容器按具体类型持有一个实例。`insert(value)` 按 `std::decay` 后的类型存储传入值，`emplace<T>(args...)` 可直接构造不可移动对象或定长数组。`get<T>()` 返回引用包装。普通函数和单一签名的函数对象可用 `invoke` 推断任意数量的参数，泛型 lambda 和重载函数对象可用 `invoke_as<Args...>` 指定类型。引用参数使用容器里的实例，值参数从实例构造。缺失和重复注册分别返回 `tower::errc::missing_dependency` 和 `tower::errc::duplicate_dependency`。
 
+## 业务示例
+
+```sh
+cmake --preset debug
+cmake --build build/debug --target tower_example_checkout tower_example_invoice
+./build/debug/example/tower_example_checkout
+./build/debug/example/tower_example_invoice
+```
+
+- [结账报价](example/checkout.hpp)把零售和批发规则放在各自的处理器里，用 `Router` 按订单类型选择处理器。`make_quote_service` 集中声明重试和审计，审计包在重试外层，因此每笔订单只记一次最终结果。
+- [账单计算](example/invoice.cpp)在启动时从 `Dependencies` 解析税率和运费规则，组装出只接收账单请求的服务。容器持有这些规则，业务计算通过已绑定的类型引用访问它们。
+
 ## 构建与检查
 
 手动配置需要 CMake 3.14 或以上。下面的预设命令使用 CMake 3.28 或以上及 Ninja。
@@ -78,4 +90,31 @@ cmake --build build/benchmark --target tower_benchmarks
 
 `benchmark` preset 使用 Release 优化并开启 `TOWER_BUILD_BENCHMARKS`。Google Benchmark 对比直接调用、`Service`、路由和无 I/O 的日志回调，并测量重试首轮与第二轮成功，以及六参数注入全部命中、首个缺失和末个缺失的耗时。可以用 `--benchmark_filter=BM_InjectSix` 筛选注入场景，用 `--benchmark_out=results.json --benchmark_out_format=json` 保存结果。基准源码的 clangd 编译数据库由 `benchmark` preset 生成在 `build/benchmark`。
 
-首次启用测试或基准时，CMake 会下载 GoogleTest 1.16.0 或 Google Benchmark 1.9.0 并校验 SHA-256。这两个版本支持 C++14。已有 CMake 工程可以通过 `add_subdirectory` 引入后链接 `tower::tower`。将 `BUILD_TESTING` 和 `TOWER_BUILD_BENCHMARKS` 设为 `OFF` 即可只使用头文件库。
+首次启用测试或基准时，CMake 会下载 GoogleTest 1.16.0 或 Google Benchmark 1.9.0 并校验 SHA-256。这两个版本支持 C++14。已有 CMake 工程可以通过 `add_subdirectory` 引入后链接 `tower::tower`。将 `BUILD_TESTING`、`TOWER_BUILD_BENCHMARKS` 和 `TOWER_BUILD_EXAMPLES` 设为 `OFF` 即可只使用头文件库。
+
+### 与手写实现比较
+
+```sh
+./build/benchmark/tower_benchmarks \
+    --benchmark_filter='BM_(DirectCall|ServiceCall|RouterCall|Checkout|Invoice)' \
+    --benchmark_min_time=0.08s --benchmark_repetitions=7 \
+    --benchmark_enable_random_interleaving=true --benchmark_report_aggregates_only=true \
+    --benchmark_out=build/benchmark/business-results.json --benchmark_out_format=json
+```
+
+[对照基准](benchmarks/business_benchmarks.cpp)共享示例中的业务规则和 `Result` 类型。结账基线手写订单分发、重试循环和审计调用。账单基线分别测量直接调用已绑定规则，以及每次请求手动查找规则。计时前校验金额、错误、重试次数和审计计数。组装服务和注册依赖在计时循环外完成，审计在两组中都使用内存计数。
+
+本机 Apple Silicon、Apple Clang 21、C++14 Release 下随机交错跑 7 轮，每次调用的 CPU 时间中位数如下。系统报告线程亲和性不可用。
+
+| 场景 | 手写（ns） | Tower（ns） |
+| --- | ---: | ---: |
+| 简单调用 / `Service` | 0.705 | 0.707 |
+| 简单调用 / 静态路由 | 0.705 | 0.705 |
+| 零售报价成功 | 2.07 | 1.25 |
+| 批发报价重试一次后成功 | 2.49 | 2.75 |
+| 报价因无效 SKU 失败 | 1.98 | 0.89 |
+| 批发报价重试耗尽 | 2.61 | 3.48 |
+| 账单，启动时绑定规则 | 0.765 | 0.766 |
+| 账单，每次请求查找规则 | 15.06 | 15.31 |
+
+将借用参数的重试合并到同一个调用点，并内联该循环后，重试耗尽从 4.60 ns 降到 3.48 ns，与手写版的差距为 0.87 ns。账单示例采用启动时绑定，因为每次请求从类型容器查找规则要额外承担运行时查找成本。

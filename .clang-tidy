@@ -11,5 +11,5 @@ Checks: >-
   modernize-use-using,
   readability-braces-around-statements
 WarningsAsErrors: ''
-HeaderFilterRegex: '(^|/)(include/tower|tests)/'
+HeaderFilterRegex: '(^|/)(include/tower|tests|example)/'
 SystemHeaders: false
