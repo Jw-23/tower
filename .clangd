@@ -1,0 +1,15 @@
+CompileFlags:
+  CompilationDatabase: build/debug
+  Add: [-Wall, -Wextra, -Wpedantic]
+
+Index:
+  Background: Build
+
+Diagnostics:
+  UnusedIncludes: Strict
+
+---
+If:
+  PathMatch: benchmarks/.*
+CompileFlags:
+  CompilationDatabase: build/benchmark
