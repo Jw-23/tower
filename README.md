@@ -38,6 +38,10 @@ int main() {
 - `.router().route<T>(handler)... .build()` 逐个注册路由并生成可调用的服务。路由仍按请求的 `std::decay` 类型在编译期分发。每个请求类型只能注册一次，所有服务的完整 `Result` 类型必须相同。`is_service_for<S, Args...>` 和 `is_layer_for<L, S, Args...>` 可用于检测指定调用签名。
 - `tower::Result<T>` 使用 `std::error_code`。回调用 `tower::failure(error)` 返回失败，调用者先检查 `Result` 再读取值或错误。对错误分支调用 `.value()` 会终止进程。
 
+## Pipeline
+
+`Service` 通过 CRTP 提供 `.next(...)`、`.guard(...)` 和 `.dispatch(...)`。用法见 [Pipeline guide (English)](docs/pipeline.md)。
+
 ## 依赖注入
 
 ```cpp
@@ -69,6 +73,7 @@ cmake --build build/debug --target tower_example_checkout tower_example_invoice
 
 - [结账报价](example/checkout.hpp)把零售和批发规则放在各自的处理器里，用 `.router().route<T>(...)` 按订单类型注册处理器。`make_quote_service` 集中声明重试和审计，审计包在重试外层，因此每笔订单只记一次最终结果。
 - [账单计算](example/invoice.cpp)用 `.dependencies().with(...).wire(...)` 在启动时解析税率和运费规则。服务持有规则，业务调用只接收账单请求。
+- [订单履约](example/pipeline.cpp)用 `Pipeline` 校验订单、按类型报价并按金额决定是否需要复核。构建目标是 `tower_example_pipeline`。
 
 ## 构建与检查
 

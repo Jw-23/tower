@@ -32,7 +32,7 @@ if(BUILD_TESTING)
         URL_HASH SHA256=78c676fc63881529bf97bf9d45948d905a66833fbfa5318ea2cd7478cb98f399)
     FetchContent_MakeAvailable(googletest)
 
-    add_executable(tower_tests tests/tower_tests.cpp tests/dependency_fixture.cpp)
+    add_executable(tower_tests tests/tower_tests.cpp tests/pipeline_tests.cpp tests/dependency_fixture.cpp)
     target_link_libraries(tower_tests PRIVATE tower::tower GTest::gtest_main)
     set_target_properties(tower_tests gtest gtest_main PROPERTIES
         CXX_STANDARD 14 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)

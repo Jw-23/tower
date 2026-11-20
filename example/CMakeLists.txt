@@ -1,4 +1,4 @@
-foreach(example IN ITEMS checkout invoice)
+foreach(example IN ITEMS checkout invoice pipeline)
     set(target "tower_example_${example}")
     add_executable(${target} "${example}.cpp")
     target_link_libraries(${target} PRIVATE tower::tower)

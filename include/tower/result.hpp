@@ -41,6 +41,12 @@ struct is_result : std::false_type {};
 template<class T, class E, class Policy>
 struct is_result<outcome::basic_result<T, E, Policy>> : std::true_type {};
 
+template<class T>
+struct IsBorrowedValue : std::is_pointer<T> {};
+
+template<class T>
+struct IsBorrowedValue<std::reference_wrapper<T>> : std::true_type {};
+
 template<class Raw, class = void>
 struct Lift;
 
